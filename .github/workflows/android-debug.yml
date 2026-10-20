@@ -1,0 +1,85 @@
+name: Android Debug CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-debug-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-debug-apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+          accept-android-sdk-licenses: true
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # 单元测试：纯 JVM 逻辑（选点规则 / 路线编解码 / 变体生成 / 地理计算）
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee test.log
+
+      # Lint 只作为质量参考：工程里 abortOnError = false，不会阻断构建
+      - name: Run lint
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :app:lintDebug --no-daemon --stacktrace 2>&1 | tee lint.log
+
+      - name: Assemble debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtualgps-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # 无论成功失败都保留日志与报告，便于排查
+      - name: Upload build logs and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            test.log
+            lint.log
+            build.log
+            app/build/reports/**
+            app/build/test-results/**
+          if-no-files-found: warn
+          retention-days: 14
