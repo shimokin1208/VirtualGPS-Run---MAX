@@ -15,7 +15,6 @@ import androidx.core.app.NotificationCompat
 import com.google.android.gms.maps.model.LatLng
 import com.virtualrun.app.MainActivity
 import com.virtualrun.app.R
-import com.virtualrun.app.compliance.TestLabelPolicy
 import com.virtualrun.app.model.Route
 import java.util.Locale
 
@@ -287,8 +286,7 @@ class MockLocationService : Service() {
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            // 常驻测试标记：不提供关闭入口，避免模拟定位在系统界面上被完全隐藏。
-            .setContentTitle(TestLabelPolicy.notificationTitle())
+            .setContentTitle("虚拟跑步进行中")
             .setContentText(statusText)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
