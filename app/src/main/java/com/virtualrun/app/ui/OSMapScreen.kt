@@ -194,13 +194,14 @@ fun OSMapScreen(viewModel: MainViewModel) {
 
     // 网络 / 系统定位状态巡检（用于状态栏与瓦片失败提示）
     LaunchedEffect(Unit) {
+        // 模拟位置授权检查会真的 add/remove 一个测试 provider，只做一次，避免周期性扰动。
+        mockAuthorized = runCatching { MockLocationService.isMockEnabled(context) }.getOrDefault(false)
         while (true) {
             hasNetwork = isNetworkAvailable(context)
             gpsEnabled = runCatching {
                 val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
                 lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
             }.getOrDefault(false)
-            mockAuthorized = runCatching { MockLocationService.isMockEnabled(context) }.getOrDefault(false)
             delay(3000)
         }
     }

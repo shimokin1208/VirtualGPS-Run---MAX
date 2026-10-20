@@ -37,10 +37,11 @@ class RouteVariantGeneratorTest {
     @Test
     fun repeatJoinsRouteWithoutDuplicatingJoints() {
         val repeated = RouteVariantGenerator.repeat(listOf(a, b, c), times = 2)
-        // 3 点 -> 第二次只追加 2 点
-        assertEquals(5, repeated.size)
+        // 开放路线重复两遍 = 6 个点（第二遍整段追加）
+        assertEquals(6, repeated.size)
         assertEquals(a, repeated.first())
         assertEquals(c, repeated.last())
+        assertEquals(listOf(a, b, c, a, b, c), repeated)
         repeated.zipWithNext().forEach { (first, second) ->
             assertTrue("zero-length segment", first != second)
         }
