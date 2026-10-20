@@ -17,8 +17,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.virtualrun.app.compliance.ComplianceStore
 import com.virtualrun.app.ui.MainViewModel
 import com.virtualrun.app.ui.OSMapScreen
+import com.virtualrun.app.ui.TestOnlyNoticeDialog
 import org.osmdroid.config.Configuration
 import java.io.File
 
@@ -34,6 +36,8 @@ private val VirtualRunColors = lightColorScheme(
 )
 
 class MainActivity : ComponentActivity() {
+
+    private lateinit var complianceStore: ComplianceStore
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -71,6 +75,7 @@ class MainActivity : ComponentActivity() {
 
         osmConfig.load(this, getSharedPreferences("osmdroid", MODE_PRIVATE))
 
+        complianceStore = ComplianceStore(this)
         requestPermissions()
 
         setContent {
@@ -79,16 +84,31 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val viewModel: MainViewModel = viewModel()
-
-                    DisposableEffect(viewModel) {
-                        viewModel.registerReceiver(this@MainActivity)
-                        onDispose {
-                            viewModel.unregisterReceiver(this@MainActivity)
-                        }
+                    // 未确认「仅用于测试」须知前，不渲染地图与运行控制，避免绕过声明直接使用。
+                    var noticeAccepted by remember {
+                        mutableStateOf(complianceStore.hasAcceptedNotice())
                     }
 
-                    OSMapScreen(viewModel = viewModel)
+                    if (!noticeAccepted) {
+                        TestOnlyNoticeDialog(
+                            onAccept = {
+                                complianceStore.acceptNotice()
+                                noticeAccepted = true
+                            },
+                            onExit = { finish() }
+                        )
+                    } else {
+                        val viewModel: MainViewModel = viewModel()
+
+                        DisposableEffect(viewModel) {
+                            viewModel.registerReceiver(this@MainActivity)
+                            onDispose {
+                                viewModel.unregisterReceiver(this@MainActivity)
+                            }
+                        }
+
+                        OSMapScreen(viewModel = viewModel)
+                    }
                 }
             }
         }

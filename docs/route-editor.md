@@ -59,3 +59,27 @@
 - `android.location.provider.ProviderProperties` 仅 API 31+ 存在，低版本走已废弃的 int 重载，
   `minSdk 26` 设备不会因 `NoClassDefFoundError` 崩溃。
 - 屏幕旋转：路线状态在 ViewModel 中，不丢失；光标通过 `Box + Alignment.Center` 自动重新居中。
+
+## 7. 测试用途声明与开关
+
+### 7.1 首次启动须知
+
+首次启动必须先阅读并确认「使用须知」，确认前不会渲染地图与运行控制：
+
+- 点「我已了解，仅用于测试」→ 写入 `SharedPreferences("compliance")`，之后不再弹出
+- 点「退出」→ 直接 `finish()`，不进入主界面
+- 点对话框外部 / 返回键 **不会**关闭它，必须显式选择
+
+### 7.2 测试模式开关
+
+右上角「测试模式」是一个 `FilterChip`，只控制**地图水印**这一层：
+
+| 标记 | 受开关控制 | 来源 |
+|---|---|---|
+| 通知栏标题 `[测试] 虚拟跑步进行中` | 否，常驻 | `TestLabelPolicy.NOTIFICATION_PREFIX` |
+| 状态栏 `测试用途：…不得用于提交真实校园跑成绩` | 否，常驻 | `TestLabelPolicy.STATUS_LINE` |
+| 地图水印 `测试用途 · 模拟定位` | 是 | `TestLabelPolicy.watermarkVisible` |
+
+**这个开关刻意不提供「完全隐藏」的能力**：关掉它只会少一个水印，通知栏与状态栏的标记依然在。
+`TestLabelPolicyTest` 用单元测试锁住这条性质，防止以后被改成「一键隐身」。
+

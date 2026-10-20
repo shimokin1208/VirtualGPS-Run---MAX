@@ -61,6 +61,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.google.android.gms.maps.model.LatLng
 import com.virtualrun.app.algorithm.RouteClassifier
 import com.virtualrun.app.algorithm.RouteRules
+import com.virtualrun.app.compliance.ComplianceStore
+import com.virtualrun.app.compliance.TestLabelPolicy
 import com.virtualrun.app.map.CHINA_MAP_MAX_ZOOM_LEVEL
 import com.virtualrun.app.map.CHINA_MAP_MIN_ZOOM_LEVEL
 import com.virtualrun.app.map.ChinaMapTileSource
@@ -140,6 +142,10 @@ fun OSMapScreen(viewModel: MainViewModel) {
     var hasNetwork by remember { mutableStateOf(true) }
     var gpsEnabled by remember { mutableStateOf(true) }
     var mockAuthorized by remember { mutableStateOf(true) }
+
+    // 合规：首次须知已在 MainActivity 确认；这里的开关只控制「额外水印」这一层。
+    val complianceStore = remember(context) { ComplianceStore(context) }
+    var testMode by remember { mutableStateOf(complianceStore.isTestModeEnabled()) }
 
     // 光标位置去抖用的非状态容器，避免每一帧滚动都触发重组。
     val lastDraftHolder = remember { arrayOfNulls<LatLng>(1) }
@@ -453,6 +459,24 @@ fun OSMapScreen(viewModel: MainViewModel) {
             modifier = Modifier.align(Alignment.Center)
         )
 
+        // 测试水印：由「测试模式」开关控制。关闭它不会移除状态栏与通知栏的常驻标记。
+        if (TestLabelPolicy.watermarkVisible(testMode)) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(y = 62.dp),
+                shape = RoundedCornerShape(10.dp),
+                color = Color(0xCC000000)
+            ) {
+                Text(
+                    TestLabelPolicy.WATERMARK_TEXT,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+        }
+
         if (!hasNetwork) {
             Surface(
                 modifier = Modifier
@@ -547,6 +571,21 @@ fun OSMapScreen(viewModel: MainViewModel) {
                 shape = CircleShape,
                 containerColor = Color.White.copy(alpha = 0.86f)
             ) { Icon(Icons.Default.Remove, "缩小") }
+            FilterChip(
+                selected = testMode,
+                onClick = {
+                    testMode = !testMode
+                    complianceStore.setTestModeEnabled(testMode)
+                },
+                label = { Text("测试模式", fontSize = 11.sp) },
+                modifier = Modifier.semantics {
+                    contentDescription = if (testMode) {
+                        "测试模式已开启，地图叠加测试水印"
+                    } else {
+                        "测试模式已关闭，仅隐藏地图水印；状态栏与通知栏的测试标记仍然保留"
+                    }
+                }
+            )
         }
 
         FloatingActionButton(
@@ -1075,6 +1114,12 @@ private fun StatusStrip(
                 "地图路线: $routeCount 点" + if (isLoop) " · 闭环" else " · 单程",
                 fontSize = 10.sp,
                 color = Color(0xFF5E6166)
+            )
+            // 常驻合规标记：不受「测试模式」开关影响，不能让模拟定位被完全隐藏。
+            Text(
+                TestLabelPolicy.STATUS_LINE,
+                fontSize = 10.sp,
+                color = Color(0xFFB3261E)
             )
             if (!isRunning) {
                 Text(
