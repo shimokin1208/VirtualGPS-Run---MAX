@@ -50,3 +50,7 @@ lint/tmp/
 
 # Kotlin
 .kotlin/
+
+# Python cache (tools/ 下的校验脚本)
+__pycache__/
+*.pyc
