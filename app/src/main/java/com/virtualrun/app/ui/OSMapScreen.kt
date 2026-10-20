@@ -3,9 +3,6 @@ package com.virtualrun.app.ui
 import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
-import android.location.LocationManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.SystemClock
 import android.provider.Settings
@@ -22,11 +19,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -104,10 +98,10 @@ private data class RunUiError(
  * 主界面。
  *
  * 布局约定（核心是「别挡住地图中心」）：
- * 1. 顶部只有一个状态胶囊 + 一个地图工具菜单按钮，状态详情默认收起；
- * 2. 底部只有一个可折叠的「操作坞」，默认只占三行左右：概览 + 选点确认 + 主按钮；
- * 3. 因此屏幕中心始终留给地图与中心光标，便于拖动地图选点；
- * 4. 快速定位（含地址反查）常驻在操作坞里，任何时候一次点击可用。
+ * 1. 顶部不再放常驻文字卡片，只留右上角地图工具按钮；
+ * 2. 底部是两块独立面板——「选点」和「配速」，各自有最小化按钮，收起后只留一行；
+ * 3. 开始 / 暂停 / 停止始终留在最底下，最小化面板不会把主操作藏掉；
+ * 4. 拖动地图时自动最小化配速面板；选点面板保持不动，避免把「确认落点」收掉。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,13 +140,10 @@ fun OSMapScreen(viewModel: MainViewModel) {
     var pendingDeleteIndex by remember { mutableStateOf<Int?>(null) }
     var showClearConfirm by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
-    var hasNetwork by remember { mutableStateOf(true) }
-    var gpsEnabled by remember { mutableStateOf(true) }
-    var mockAuthorized by remember { mutableStateOf(true) }
 
-    // 折叠状态：两个常驻面板默认都是收起的，保证地图可视区域足够大。
-    var dockExpanded by remember { mutableStateOf(false) }
-    var statusExpanded by remember { mutableStateOf(false) }
+    // 选点、配速各自独立最小化。配速默认收起，避免一进地图就被滑块挡住中心。
+    var selectionMinimized by remember { mutableStateOf(false) }
+    var paceMinimized by remember { mutableStateOf(true) }
     var mapMenuOpen by remember { mutableStateOf(false) }
     var locating by remember { mutableStateOf(false) }
     var myAddress by remember { mutableStateOf<String?>(null) }
@@ -261,30 +252,17 @@ fun OSMapScreen(viewModel: MainViewModel) {
         viewModel.consumeNotice()
     }
 
-    // 网络 / 系统定位状态巡检（用于顶部状态胶囊）
-    LaunchedEffect(Unit) {
-        // 模拟位置授权检查会真的 add/remove 一个测试 provider，只做一次，避免周期性扰动。
-        mockAuthorized = runCatching { MockLocationService.isMockEnabled(context) }.getOrDefault(false)
-        while (true) {
-            hasNetwork = isNetworkAvailable(context)
-            gpsEnabled = runCatching {
-                val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-                lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
-            }.getOrDefault(false)
-            delay(3000)
-        }
-    }
-
-    // 进入选点模式（或地图就绪）时立刻刷新一次预选坐标，避免面板一直显示「等待地图就绪」。
+    // 进入选点时展开选点面板，并立刻刷新预选坐标。
     LaunchedEffect(isSelecting, isRunning, mapView) {
         if (isSelecting && !isRunning) {
+            selectionMinimized = false
             pushDraftFromCenter(true)
         }
     }
 
-    // 开始跑步后自动收起详情，把地图让出来。
+    // 开始跑步后收起选点面板，把地图让出来。配速面板保持用户自己的开合状态。
     LaunchedEffect(isRunning) {
-        if (isRunning) dockExpanded = false
+        if (isRunning) selectionMinimized = true
     }
 
     LaunchedEffect(progress, lapCount, isRunning) {
@@ -486,8 +464,8 @@ fun OSMapScreen(viewModel: MainViewModel) {
                     controller.setCenter(GeoPoint(39.9042, 116.4074))
                     addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
-                            // 拖地图就是要选点：顺手收起展开的设置区，保证中心光标不被面板挡住
-                            if (dockExpanded) dockExpanded = false
+                            // 拖地图时收起配速滑块，避免挡住中心光标；选点确认行保持可见。
+                            if (!paceMinimized) paceMinimized = true
                             syncDraftFromCenter()
                             return false
                         }
@@ -526,78 +504,220 @@ fun OSMapScreen(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxSize()
         )
 
-        // 顶部：状态胶囊 + 地图工具菜单（仅两个常驻元素，且详情默认收起）
-        Column(
+        // 右上角只留地图工具，不再放常驻文字卡片。
+        Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp)
-                .padding(top = 10.dp)
+                .align(Alignment.TopEnd)
+                .padding(top = 10.dp, end = 12.dp)
         ) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.Start
-                ) {
-                    StatusPill(
-                        gpsEnabled = gpsEnabled,
-                        mockAuthorized = mockAuthorized,
-                        hasNetwork = hasNetwork,
-                        expanded = statusExpanded,
-                        onToggle = { statusExpanded = !statusExpanded }
-                    )
-                    AnimatedVisibility(
-                        visible = statusExpanded,
-                        enter = fadeIn(tween(150)) + slideInVertically(tween(200)) { -it / 3 },
-                        exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { -it / 3 }
-                    ) {
-                        StatusDetailCard(
-                            modifier = Modifier.padding(top = 8.dp),
-                            routeCount = routePoints.size,
-                            isLoop = isLoopMode,
-                            mockAuthorized = mockAuthorized,
-                            gpsEnabled = gpsEnabled,
-                            currentLocation = currentLocation,
-                            address = myAddress,
-                            isRunning = isRunning
-                        )
-                    }
+            MapMenuButton(
+                mapMode = mapMode,
+                expanded = mapMenuOpen,
+                locating = locating,
+                onExpandedChange = { mapMenuOpen = it },
+                onToggleMode = {
+                    mapMenuOpen = false
+                    mapMode = mapMode.next()
+                    mapPreferences.edit().putString("mode", mapMode.name).apply()
+                },
+                onZoomIn = {
+                    mapMenuOpen = false
+                    zoomBy(true)
+                },
+                onZoomOut = {
+                    mapMenuOpen = false
+                    zoomBy(false)
+                },
+                onLocate = {
+                    mapMenuOpen = false
+                    locateToMyPosition()
                 }
-                Spacer(Modifier.width(8.dp))
-                MapMenuButton(
-                    mapMode = mapMode,
-                    expanded = mapMenuOpen,
-                    locating = locating,
-                    onExpandedChange = { mapMenuOpen = it },
-                    onToggleMode = {
-                        mapMenuOpen = false
-                        mapMode = mapMode.next()
-                        mapPreferences.edit().putString("mode", mapMode.name).apply()
-                    },
-                    onZoomIn = {
-                        mapMenuOpen = false
-                        zoomBy(true)
-                    },
-                    onZoomOut = {
-                        mapMenuOpen = false
-                        zoomBy(false)
-                    },
-                    onLocate = {
-                        mapMenuOpen = false
-                        locateToMyPosition()
-                    }
-                )
-            }
+            )
         }
 
-        // 底部：唯一常驻的「操作坞」，默认收起，只占很少的高度。
+        // 底部：选点面板、配速面板各自可最小化；主按钮始终可见。
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            MinimizablePanel(
+                title = dockTitle(
+                    routeName = routeName,
+                    pointCount = routePoints.size,
+                    isRunning = isRunning,
+                    isPaused = isPaused,
+                    isLoop = isLoopMode,
+                    lap = lapCount,
+                    isSelecting = isSelecting
+                ),
+                minimized = selectionMinimized,
+                minimizeLabel = "最小化选点面板",
+                expandLabel = "展开选点面板",
+                onToggle = { selectionMinimized = !selectionMinimized },
+                headerActions = {
+                    DockIconButton(
+                        icon = Icons.Default.MyLocation,
+                        description = "定位到我的位置",
+                        busy = locating,
+                        tint = MaterialTheme.colorScheme.primary,
+                        onClick = { locateToMyPosition() }
+                    )
+                    DockIconButton(
+                        icon = Icons.Default.Place,
+                        description = if (isSelecting) "已在地图中心选点" else "在地图中心开始选点",
+                        tint = if (isSelecting && !isRunning) ViaBlue else MutedText,
+                        onClick = {
+                            selectionMinimized = false
+                            if (!isSelecting) {
+                                viewModel.beginSelection()
+                                routePoints.lastOrNull()?.let { last ->
+                                    flyTo(last.latitude, last.longitude, mapView?.zoomLevelDouble ?: 16.0)
+                                }
+                            }
+                        }
+                    )
+                }
+            ) {
+                Text(
+                    text = dockSubtitle(
+                        pointCount = routePoints.size,
+                        distanceMeters = viewModel.getCurrentRouteDistance(),
+                        durationSeconds = viewModel.getCurrentRouteDuration(),
+                        isLoop = isLoopMode,
+                        address = myAddress,
+                        isSelecting = isSelecting,
+                        isRunning = isRunning
+                    ),
+                    fontSize = 11.sp,
+                    color = MutedText,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (isSelecting && !isRunning) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "预选坐标（GCJ-02）",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = draftPoint?.let {
+                                    "GCJ-02 " + GeoMath.formatLatLng(it.latitude, it.longitude, 5)
+                                } ?: "等待地图就绪…",
+                                fontSize = 11.sp,
+                                color = MutedText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                if (draftPoint == null) {
+                                    uiError = RunUiError("地图还没准备好，请稍后重试", RunUiErrorAction.DISMISS)
+                                } else if (!viewModel.confirmDraftPoint()) {
+                                    uiError = RunUiError("落点失败，请重试", RunUiErrorAction.DISMISS)
+                                }
+                            },
+                            enabled = draftPoint != null,
+                            modifier = Modifier.height(40.dp)
+                        ) {
+                            Text("确认落点", fontSize = 14.sp)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = { viewModel.cancelSelection() },
+                            modifier = Modifier.height(40.dp)
+                        ) {
+                            Text("取消", fontSize = 14.sp)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { showClearConfirm = true },
+                        enabled = routePoints.isNotEmpty(),
+                        modifier = Modifier.weight(1f).height(40.dp)
+                    ) { Text("清除", fontSize = 13.sp) }
+                    OutlinedButton(
+                        onClick = {
+                            if (!viewModel.closeLoop()) {
+                                uiError = RunUiError(
+                                    "闭环需要至少 3 个点，且当前未闭环",
+                                    RunUiErrorAction.DISMISS
+                                )
+                            }
+                        },
+                        enabled = RouteRules.canCloseLoop(routePoints),
+                        modifier = Modifier.weight(1f).height(40.dp)
+                    ) { Text("闭环", fontSize = 13.sp) }
+                    OutlinedButton(
+                        onClick = { showRenameDialog = true },
+                        modifier = Modifier.weight(1f).height(40.dp)
+                    ) { Text("改名", fontSize = 13.sp) }
+                }
+                if (routePoints.isEmpty()) {
+                    TextButton(
+                        onClick = {
+                            if (!viewModel.restoreLastRoute()) {
+                                uiError = RunUiError("没有可恢复的路线", RunUiErrorAction.DISMISS)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("恢复上次路线", fontSize = 13.sp) }
+                }
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LegendDot(StartGreen, "起点")
+                    Spacer(Modifier.width(10.dp))
+                    LegendDot(ViaBlue, "途经")
+                    Spacer(Modifier.width(10.dp))
+                    LegendDot(EndRed, "终点")
+                    Spacer(Modifier.weight(1f))
+                    Text("共 ${routePoints.size} 点", fontSize = 11.sp, color = HintText)
+                }
+            }
+
+            val paceTitle = buildString {
+                append("目标配速 ${"%.1f".format(sliderPace)} 分/km")
+                if (isRunning && animatedSpeed >= MIN_CURRENT_PACE_DISPLAY_SPEED_MPS) {
+                    val currentPace = 1000f / (animatedSpeed.coerceAtLeast(0.1f) * 60f)
+                    append(" · 当前 ${"%.1f".format(currentPace)}")
+                }
+            }
+            MinimizablePanel(
+                title = paceTitle,
+                minimized = paceMinimized,
+                minimizeLabel = "最小化配速面板",
+                expandLabel = "展开配速面板",
+                onToggle = { paceMinimized = !paceMinimized }
+            ) {
+                Slider(
+                    value = sliderPace,
+                    onValueChange = { sliderPace = it },
+                    onValueChangeFinished = { viewModel.setBasePace(sliderPace, context) },
+                    valueRange = 3f..15f,
+                    steps = 11
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("3'00\" · 快", fontSize = 10.sp, color = HintText)
+                    Text("15'00\" · 慢", fontSize = 10.sp, color = HintText)
+                }
+            }
+
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp),
@@ -614,211 +734,6 @@ fun OSMapScreen(viewModel: MainViewModel) {
                         )
                         Spacer(Modifier.height(8.dp))
                     }
-
-                    // 概览行：路线概要 + 定位 + 选点 + 展开
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = dockTitle(
-                                    routeName = routeName,
-                                    pointCount = routePoints.size,
-                                    isRunning = isRunning,
-                                    isPaused = isPaused,
-                                    isLoop = isLoopMode,
-                                    lap = lapCount,
-                                    isSelecting = isSelecting
-                                ),
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = dockSubtitle(
-                                    pointCount = routePoints.size,
-                                    distanceMeters = viewModel.getCurrentRouteDistance(),
-                                    durationSeconds = viewModel.getCurrentRouteDuration(),
-                                    isLoop = isLoopMode,
-                                    address = myAddress,
-                                    isSelecting = isSelecting,
-                                    isRunning = isRunning
-                                ),
-                                fontSize = 11.sp,
-                                color = MutedText,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        DockIconButton(
-                            icon = Icons.Default.MyLocation,
-                            description = "定位到我的位置",
-                            busy = locating,
-                            tint = MaterialTheme.colorScheme.primary,
-                            onClick = { locateToMyPosition() }
-                        )
-                        DockIconButton(
-                            icon = Icons.Default.Place,
-                            description = if (isSelecting) "已在地图中心选点" else "在地图中心开始选点",
-                            tint = if (isSelecting && !isRunning) ViaBlue else MutedText,
-                            onClick = {
-                                if (!isSelecting) {
-                                    viewModel.beginSelection()
-                                    // 与旧版「重新选点」一致：已有路线时把地图带回最后一个点
-                                    routePoints.lastOrNull()?.let { last ->
-                                        flyTo(last.latitude, last.longitude, mapView?.zoomLevelDouble ?: 16.0)
-                                    }
-                                }
-                            }
-                        )
-                        DockIconButton(
-                            icon = if (dockExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                            description = if (dockExpanded) "收起更多设置" else "展开更多设置",
-                            onClick = { dockExpanded = !dockExpanded }
-                        )
-                    }
-
-                    // 选点确认行：只显示中心光标当前坐标与确认 / 取消
-                    if (isSelecting && !isRunning) {
-                        Spacer(Modifier.height(8.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "预选坐标（GCJ-02）",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = draftPoint?.let {
-                                        "GCJ-02 " + GeoMath.formatLatLng(it.latitude, it.longitude, 5)
-                                    } ?: "等待地图就绪…",
-                                    fontSize = 11.sp,
-                                    color = MutedText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Button(
-                                onClick = {
-                                    if (draftPoint == null) {
-                                        uiError = RunUiError("地图还没准备好，请稍后重试", RunUiErrorAction.DISMISS)
-                                    } else if (!viewModel.confirmDraftPoint()) {
-                                        uiError = RunUiError("落点失败，请重试", RunUiErrorAction.DISMISS)
-                                    }
-                                },
-                                enabled = draftPoint != null,
-                                modifier = Modifier.height(40.dp)
-                            ) {
-                                Text("确认落点", fontSize = 14.sp)
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            OutlinedButton(
-                                onClick = { viewModel.cancelSelection() },
-                                modifier = Modifier.height(40.dp)
-                            ) {
-                                Text("取消", fontSize = 14.sp)
-                            }
-                        }
-                    }
-
-                    // 展开区：配速 + 路线编辑，超出高度可滚动，永不把地图挤没
-                    AnimatedVisibility(
-                        visible = dockExpanded,
-                        enter = fadeIn(tween(160)) + slideInVertically(tween(220)) { it / 4 },
-                        exit = fadeOut(tween(120)) + slideOutVertically(tween(180)) { it / 4 }
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .heightIn(max = 236.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Spacer(Modifier.height(10.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "目标配速: ${"%.1f".format(sliderPace)} 分/km",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                if (isRunning && animatedSpeed >= MIN_CURRENT_PACE_DISPLAY_SPEED_MPS) {
-                                    val currentPace = 1000f / (animatedSpeed.coerceAtLeast(0.1f) * 60f)
-                                    Text(
-                                        "当前 ${"%.1f".format(currentPace)} 分/km",
-                                        fontSize = 12.sp,
-                                        color = RunGreen
-                                    )
-                                }
-                            }
-                            Slider(
-                                value = sliderPace,
-                                onValueChange = { sliderPace = it },
-                                onValueChangeFinished = { viewModel.setBasePace(sliderPace, context) },
-                                valueRange = 3f..15f,
-                                steps = 11
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("3'00\" · 快", fontSize = 10.sp, color = HintText)
-                                Text("15'00\" · 慢", fontSize = 10.sp, color = HintText)
-                            }
-                            Spacer(Modifier.height(10.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedButton(
-                                    onClick = { showClearConfirm = true },
-                                    enabled = routePoints.isNotEmpty(),
-                                    modifier = Modifier.weight(1f).height(40.dp)
-                                ) { Text("清除", fontSize = 13.sp) }
-                                OutlinedButton(
-                                    onClick = {
-                                        if (!viewModel.closeLoop()) {
-                                            uiError = RunUiError(
-                                                "闭环需要至少 3 个点，且当前未闭环",
-                                                RunUiErrorAction.DISMISS
-                                            )
-                                        }
-                                    },
-                                    enabled = RouteRules.canCloseLoop(routePoints),
-                                    modifier = Modifier.weight(1f).height(40.dp)
-                                ) { Text("闭环", fontSize = 13.sp) }
-                                OutlinedButton(
-                                    onClick = { showRenameDialog = true },
-                                    modifier = Modifier.weight(1f).height(40.dp)
-                                ) { Text("改名", fontSize = 13.sp) }
-                            }
-                            if (routePoints.isEmpty()) {
-                                TextButton(
-                                    onClick = {
-                                        if (!viewModel.restoreLastRoute()) {
-                                            uiError = RunUiError("没有可恢复的路线", RunUiErrorAction.DISMISS)
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("恢复上次路线", fontSize = 13.sp) }
-                            }
-                            Spacer(Modifier.height(6.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                LegendDot(StartGreen, "起点")
-                                Spacer(Modifier.width(10.dp))
-                                LegendDot(ViaBlue, "途经")
-                                Spacer(Modifier.width(10.dp))
-                                LegendDot(EndRed, "终点")
-                                Spacer(Modifier.weight(1f))
-                                Text("共 ${routePoints.size} 点", fontSize = 11.sp, color = HintText)
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
                     if (isRunning) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1055,108 +970,64 @@ private fun MapCenterCursor(visible: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
-/** 顶部状态胶囊：一行摘要，点一下才展开详情。 */
+/** 可最小化的底部面板：收起后只留标题行和「展开」。 */
 @Composable
-private fun StatusPill(
-    gpsEnabled: Boolean,
-    mockAuthorized: Boolean,
-    hasNetwork: Boolean,
-    expanded: Boolean,
-    onToggle: () -> Unit
+private fun MinimizablePanel(
+    title: String,
+    minimized: Boolean,
+    minimizeLabel: String,
+    expandLabel: String,
+    onToggle: () -> Unit,
+    headerActions: @Composable RowScope.() -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit
 ) {
-    val healthy = gpsEnabled && mockAuthorized && hasNetwork
-    val dotColor = if (healthy) RunGreen else Color(0xFFB3261E)
-    val summary = buildString {
-        append(if (mockAuthorized) "模拟位置已授权" else "未授权模拟位置")
-        append(if (gpsEnabled) " · GPS 开" else " · GPS 关")
-        if (!hasNetwork) append(" · 无网络")
-    }
     Surface(
-        shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-        shadowElevation = 4.dp
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 8.dp
     ) {
-        Row(
-            modifier = Modifier
-                .clickable(onClick = onToggle)
-                .padding(start = 10.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.padding(
+                start = 14.dp,
+                end = 6.dp,
+                top = 4.dp,
+                bottom = if (minimized) 4.dp else 10.dp
+            )
         ) {
-            Canvas(Modifier.size(8.dp)) { drawCircle(color = dotColor) }
-            Spacer(Modifier.width(6.dp))
-            Text(summary, fontSize = 11.sp, color = if (healthy) Color(0xFF3C4043) else dotColor, maxLines = 1)
-            Spacer(Modifier.width(2.dp))
-            Icon(
-                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                contentDescription = if (expanded) "收起状态详情" else "展开状态详情",
-                modifier = Modifier.size(16.dp),
-                tint = MutedText
-            )
-        }
-    }
-}
-
-/** 状态详情：系统定位 / 模拟位置 / 地图路线 / 当前地址。 */
-@Composable
-private fun StatusDetailCard(
-    modifier: Modifier = Modifier,
-    routeCount: Int,
-    isLoop: Boolean,
-    mockAuthorized: Boolean,
-    gpsEnabled: Boolean,
-    currentLocation: LatLng?,
-    address: String?,
-    isRunning: Boolean
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        shadowElevation = 4.dp
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
-            DetailLine(
-                label = "系统定位",
-                value = (if (mockAuthorized) "模拟位置已授权" else "未授权模拟位置") +
-                    " · " + (if (gpsEnabled) "GPS 开" else "GPS 关"),
-                healthy = mockAuthorized && gpsEnabled
-            )
-            DetailLine(
-                label = "模拟位置",
-                value = currentLocation?.let {
-                    GeoMath.formatLatLng(it.latitude, it.longitude, 5)
-                } ?: "尚无"
-            )
-            DetailLine(label = "地图路线", value = "$routeCount 点" + if (isLoop) " · 闭环" else " · 单程")
-            if (!address.isNullOrBlank()) {
-                DetailLine(label = "当前地址", value = address)
-            }
-            if (!isRunning) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "拖动地图对准，点「确认落点」加入路线",
-                    fontSize = 10.sp,
-                    color = HintText
+                    text = title,
+                    modifier = Modifier.weight(1f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                headerActions()
+                TextButton(
+                    onClick = onToggle,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .height(36.dp)
+                        .semantics {
+                            contentDescription = if (minimized) expandLabel else minimizeLabel
+                        }
+                ) {
+                    Text(if (minimized) "展开" else "最小化", fontSize = 12.sp)
+                }
+            }
+            AnimatedVisibility(
+                visible = !minimized,
+                enter = fadeIn(tween(160)) + slideInVertically(tween(220)) { it / 4 },
+                exit = fadeOut(tween(120)) + slideOutVertically(tween(180)) { it / 4 }
+            ) {
+                Column(modifier = Modifier.padding(end = 8.dp)) {
+                    content()
+                }
             }
         }
-    }
-}
-
-@Composable
-private fun DetailLine(label: String, value: String, healthy: Boolean? = null) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("$label: ", fontSize = 10.sp, color = HintText)
-        Text(
-            text = value,
-            fontSize = 10.sp,
-            color = when (healthy) {
-                true -> RunGreen
-                false -> Color(0xFFB3261E)
-                null -> Color(0xFF3C4043)
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 
@@ -1288,13 +1159,6 @@ private fun RoutePointType.androidColor(): Int = when (this) {
     RoutePointType.START -> 0xFF2EAD65.toInt()
     RoutePointType.VIA -> 0xFF1E88E5.toInt()
     RoutePointType.END -> 0xFFE04F5F.toInt()
-}
-
-private fun isNetworkAvailable(context: Context): Boolean {
-    val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        ?: return true
-    val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
-    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
 }
 
 fun formatDuration(seconds: Long): String {
