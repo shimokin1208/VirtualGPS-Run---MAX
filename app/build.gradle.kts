@@ -12,8 +12,8 @@ android {
         applicationId = "com.virtualrun.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "1.3.0"
+        versionCode = 10
+        versionName = "1.3.1"
 
     }
 
