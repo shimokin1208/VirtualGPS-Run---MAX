@@ -105,7 +105,11 @@ private data class RunUiError(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OSMapScreen(viewModel: MainViewModel) {
+fun OSMapScreen(
+    viewModel: MainViewModel,
+    dragEditEnabled: Boolean,
+    onOpenSettings: () -> Unit
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -304,17 +308,19 @@ fun OSMapScreen(viewModel: MainViewModel) {
         }
     }
 
-    // 计划路线与点位标记
-    LaunchedEffect(mapView, routePoints, isLoopMode, isRunning) {
+    // 计划路线与点位标记。拖动过程中只改这条线和标记位置，松手才写回路线。
+    LaunchedEffect(mapView, routePoints, isLoopMode, isRunning, dragEditEnabled) {
         val mv = mapView ?: return@LaunchedEffect
         routePolyline?.let(mv.overlays::remove)
         routeMarkers?.let(mv.overlays::remove)
         routePolyline = null
         routeMarkers = null
 
+        val livePoints = routePoints.map { GeoPoint(it.latitude, it.longitude) }.toMutableList()
+        val closed = RouteRules.isClosed(routePoints)
         if (routePoints.size >= 2) {
             routePolyline = Polyline(mv).apply {
-                routePoints.forEach { addPoint(GeoPoint(it.latitude, it.longitude)) }
+                setPoints(ArrayList(livePoints))
                 outlinePaint.apply {
                     color = PlannedRouteColor.toArgb()
                     strokeWidth = 6f
@@ -322,15 +328,31 @@ fun OSMapScreen(viewModel: MainViewModel) {
             }.also(mv.overlays::add)
         }
 
+        fun followDrag(index: Int, position: GeoPoint) {
+            if (index !in livePoints.indices) return
+            val next = GeoPoint(position.latitude, position.longitude)
+            livePoints[index] = next
+            if (closed && (index == 0 || index == livePoints.lastIndex)) {
+                livePoints[0] = GeoPoint(next.latitude, next.longitude)
+                livePoints[livePoints.lastIndex] = GeoPoint(next.latitude, next.longitude)
+            }
+            routePolyline?.setPoints(ArrayList(livePoints))
+            mv.invalidate()
+        }
+
         if (routePoints.isNotEmpty()) {
             val types = RouteClassifier.classify(routePoints)
+            val canDrag = dragEditEnabled && !isRunning
             routeMarkers = FolderOverlay().also { folder ->
                 routePoints.forEachIndexed { index, point ->
+                    // 闭环的最后一个点就是起点，不再叠一颗终点标记，避免两颗点抢拖动手势。
+                    if (closed && index == routePoints.lastIndex) return@forEachIndexed
                     val type = types.getOrElse(index) { RoutePointType.VIA }
                     val marker = Marker(mv).apply {
                         position = GeoPoint(point.latitude, point.longitude)
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         infoWindow = null
+                        isDraggable = canDrag
                         icon = android.graphics.drawable.GradientDrawable().apply {
                             shape = android.graphics.drawable.GradientDrawable.OVAL
                             setColor(type.androidColor())
@@ -346,6 +368,24 @@ fun OSMapScreen(viewModel: MainViewModel) {
                         setOnMarkerClickListener { _, _ ->
                             if (!isRunning) pendingDeleteIndex = index
                             true
+                        }
+                        if (canDrag) {
+                            setOnMarkerDragListener(object : Marker.OnMarkerDragListener {
+                                override fun onMarkerDragStart(marker: Marker) = Unit
+
+                                override fun onMarkerDrag(marker: Marker) {
+                                    followDrag(index, marker.position)
+                                }
+
+                                override fun onMarkerDragEnd(marker: Marker) {
+                                    followDrag(index, marker.position)
+                                    viewModel.movePoint(
+                                        index,
+                                        marker.position.latitude,
+                                        marker.position.longitude
+                                    )
+                                }
+                            })
                         }
                     }
                     folder.add(marker)
@@ -531,6 +571,10 @@ fun OSMapScreen(viewModel: MainViewModel) {
                 onLocate = {
                     mapMenuOpen = false
                     locateToMyPosition()
+                },
+                onOpenSettings = {
+                    mapMenuOpen = false
+                    onOpenSettings()
                 }
             )
         }
@@ -685,6 +729,14 @@ fun OSMapScreen(viewModel: MainViewModel) {
                     LegendDot(EndRed, "终点")
                     Spacer(Modifier.weight(1f))
                     Text("共 ${routePoints.size} 点", fontSize = 11.sp, color = HintText)
+                }
+                if (dragEditEnabled && !isRunning && routePoints.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "按住路径点拖动，路线会跟着变",
+                        fontSize = 11.sp,
+                        color = HintText
+                    )
                 }
             }
 
@@ -1041,7 +1093,8 @@ private fun MapMenuButton(
     onToggleMode: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
-    onLocate: () -> Unit
+    onLocate: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     Box {
         SmallFloatingActionButton(
@@ -1075,6 +1128,11 @@ private fun MapMenuButton(
                 onClick = onLocate,
                 enabled = !locating,
                 leadingIcon = { Icon(Icons.Default.MyLocation, contentDescription = null) }
+            )
+            DropdownMenuItem(
+                text = { Text("设置") },
+                onClick = onOpenSettings,
+                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
             )
         }
     }

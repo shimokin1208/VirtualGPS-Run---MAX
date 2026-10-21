@@ -49,6 +49,25 @@ object RouteRules {
     }
 
     /**
+     * 把某个路径点挪到新坐标。
+     *
+     * 已闭环的路线首尾是同一个点：拖起点或拖那个重复的终点时，两头一起动，环不会被拽开。
+     * 下标非法时原样返回。
+     */
+    fun movePoint(points: List<LatLng>, index: Int, point: LatLng): List<LatLng> {
+        if (index !in points.indices) return points
+        val result = ArrayList(points)
+        val closed = isClosed(points)
+        if (closed && (index == 0 || index == points.lastIndex)) {
+            result[0] = point
+            result[result.lastIndex] = point
+        } else {
+            result[index] = point
+        }
+        return result
+    }
+
+    /**
      * 用户主动闭环：把起点追加到末尾。
      * 点数不足或已经闭环时原样返回。
      */

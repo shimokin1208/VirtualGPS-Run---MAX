@@ -11,6 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import com.google.android.gms.maps.model.LatLng
 import com.virtualrun.app.algorithm.RouteRules
 import com.virtualrun.app.algorithm.TrajectoryUtils
+import com.virtualrun.app.map.GeoMath
 import com.virtualrun.app.persist.RouteStore
 import com.virtualrun.app.persist.SavedRoute
 import com.virtualrun.app.persist.SavedRouteFactory
@@ -266,6 +267,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (index !in current.indices) return false
         val updated = RouteRules.removeAt(current, index)
         applyRoute(updated, loop = false)
+        return true
+    }
+
+    /**
+     * 拖动结束后把路径点落到新坐标。
+     * 只在松手时调用，拖动过程中的线由地图自己重画，避免每个像素都重建标记。
+     * 原本是闭环的路线，移动后如果首尾仍重合，就继续保持闭环。
+     */
+    fun movePoint(index: Int, latitude: Double, longitude: Double): Boolean {
+        if (_isRunning.value) return false
+        if (!GeoMath.isValidLatLng(latitude, longitude)) return false
+        val current = _routePoints.value
+        val updated = RouteRules.movePoint(current, index, LatLng(latitude, longitude))
+        if (updated == current) return false
+        applyRoute(updated, loop = _isLoopMode.value && RouteRules.isClosed(updated))
         return true
     }
 

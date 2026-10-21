@@ -85,6 +85,43 @@ class RouteRulesTest {
     }
 
     @Test
+    fun movePointReplacesOnlyTheRequestedIndex() {
+        val a = point(0.0, 0.0)
+        val b = point(0.0, 0.001)
+        val c = point(0.0, 0.002)
+        val moved = point(0.0, 0.0015)
+
+        assertEquals(listOf(a, moved, c), RouteRules.movePoint(listOf(a, b, c), 1, moved))
+        assertEquals(listOf(a, b, c), RouteRules.movePoint(listOf(a, b, c), 9, moved))
+        assertEquals(listOf(a, b, c), RouteRules.movePoint(listOf(a, b, c), -1, moved))
+    }
+
+    @Test
+    fun movePointOnClosedLoopKeepsBothEndsTogether() {
+        val start = point(39.9042, 116.4074)
+        val via = point(39.9046, 116.4080)
+        val end = point(39.9050, 116.4070)
+        val closed = RouteRules.closeLoop(listOf(start, via, end))
+        val shifted = point(39.9043, 116.4075)
+
+        val fromStart = RouteRules.movePoint(closed, 0, shifted)
+        assertEquals(shifted, fromStart.first())
+        assertEquals(shifted, fromStart.last())
+        assertEquals(via, fromStart[1])
+        assertTrue(RouteRules.isClosed(fromStart))
+
+        val fromDuplicateEnd = RouteRules.movePoint(closed, closed.lastIndex, shifted)
+        assertEquals(fromStart, fromDuplicateEnd)
+
+        val viaMoved = point(39.9060, 116.4090)
+        val movedVia = RouteRules.movePoint(closed, 1, viaMoved)
+        assertEquals(start, movedVia.first())
+        assertEquals(start, movedVia.last())
+        assertEquals(viaMoved, movedVia[1])
+        assertTrue(RouteRules.isClosed(movedVia))
+    }
+
+    @Test
     fun reorderMovesPointAndKeepsSize() {
         val a = point(0.0, 0.0)
         val b = point(0.0, 0.001)

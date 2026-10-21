@@ -17,8 +17,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.virtualrun.app.persist.AppSettings
 import com.virtualrun.app.ui.MainViewModel
 import com.virtualrun.app.ui.OSMapScreen
+import com.virtualrun.app.ui.SettingsScreen
 import org.osmdroid.config.Configuration
 import java.io.File
 
@@ -80,6 +82,9 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     val viewModel: MainViewModel = viewModel()
+                    val appSettings = remember { AppSettings(this@MainActivity) }
+                    var showSettings by remember { mutableStateOf(false) }
+                    var dragEditEnabled by remember { mutableStateOf(appSettings.isDragEditEnabled()) }
 
                     DisposableEffect(viewModel) {
                         viewModel.registerReceiver(this@MainActivity)
@@ -88,7 +93,22 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    OSMapScreen(viewModel = viewModel)
+                    if (showSettings) {
+                        SettingsScreen(
+                            dragEditEnabled = dragEditEnabled,
+                            onDragEditChange = { enabled ->
+                                dragEditEnabled = enabled
+                                appSettings.setDragEditEnabled(enabled)
+                            },
+                            onBack = { showSettings = false }
+                        )
+                    } else {
+                        OSMapScreen(
+                            viewModel = viewModel,
+                            dragEditEnabled = dragEditEnabled,
+                            onOpenSettings = { showSettings = true }
+                        )
+                    }
                 }
             }
         }
